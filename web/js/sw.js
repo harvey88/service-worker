@@ -1,6 +1,6 @@
 "use strict";
 
-const version = 3;
+const version = 5;
 var isOnline = true;
 var isLoggedIn = false;
 var cacheName = `ramblings-${version}`;
@@ -26,6 +26,7 @@ var urlsToCache = {
 self.addEventListener("install", onInstall);
 self.addEventListener("activate", onActivate);
 self.addEventListener("message", onMessage);
+self.addEventListener("fetch", onFetch);
 
 main().catch(console.error);
 
@@ -59,14 +60,67 @@ function onMessage({data}) {
     }
 }
 
+function onFetch(evt) {
+    evt.respondWith(router(evt.request));
+}
+
+async function router(req) {
+    var url = new URL(req.url);
+    var reqURL = url.pathname;
+    var cache = await caches.open(cacheName);
+
+    if (url.origin == location.origin) {
+        let res;
+        try { 
+            let fetchOptions = {
+                method: req.method,
+                headers: req.headers,
+                credentials: "omit",
+                cache: "no-store",
+            };
+            let res = await fetch(req.url, fetchOptions);
+            if(res && res.ok) {
+                await cache.put(reqURL, res.clone());
+                return res;
+            }
+        }
+        catch(err) {}
+        
+        res = await cache.match(reqURL);
+        if (res) {
+            return res.clone();
+        }
+    }
+}
+
 function onActivate(evt) {
     evt.waitUntil(handleActivation());
 }
 
 async function handleActivation() {
-    await clients.claim();
+    await clearCaches();
     await cacheLoggedOutFiles(/*forceReload=*/true);
+    await clients.claim();
     console.log(`Service worker (${version}) actived.`); 
+}
+
+async function clearCaches() {
+    var cacheNames = await caches.keys();
+    var oldCacheNames = cacheNames.filter(function matchOldCache(cacheName) {
+        if (/^ramblings-\d+$/.test(cacheName)) {
+            let [,cacheVersion] = cacheName.match(/^ramblings-(\d+)$/);
+            cacheVersion = (cacheVersion != null) ?  Number(cacheVersion) : cacheVersion
+            return (
+                cacheVersion > 0 &&
+                cacheVersion != version
+            ) 
+        }
+    });
+    return Promise.all(
+        oldCacheNames.map(function deleteCache(cacheName) {
+            return caches.delete(cacheName);
+        })
+    )
 }
 
 
